@@ -2191,6 +2191,12 @@ void hkBorderDraw(void* borderDecorationThisptr, PHLMONITOR monitor, const float
     g_controller->borderDrawHook(borderDecorationThisptr, monitor, alpha);
 }
 
+void hkCustomShadow(void* renderer, const CBox& box, int round, float power, int range,
+                    const Config::CGradientValueData& color, float alpha) {
+    if (g_controller)
+        g_controller->customShadowHook(renderer, box, round, power, range, color, alpha);
+}
+
 void hkShadowDraw(void* shadowDecorationThisptr, PHLMONITOR monitor, const float& alpha) {
     if (!g_controller)
         return;
@@ -2402,6 +2408,8 @@ OverviewController::~OverviewController() {
         HyprlandAPI::removeFunctionHook(m_handle, m_borderDrawHook);
     if (m_shadowDrawHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_shadowDrawHook);
+    if (m_customShadowHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_customShadowHook);
     if (m_groupBarDrawHook) {
         m_groupBarDrawHook->unhook();
         HyprlandAPI::removeFunctionHook(m_handle, m_groupBarDrawHook);
@@ -4282,6 +4290,36 @@ void OverviewController::borderDrawHook(void* borderDecorationThisptr, const PHL
     renderOverviewBorderForWindow(window, monitor, alpha);
 }
 
+// Viewflow restores currentWindow inside its deferred custom pass. Transform
+// the shader call here, where that identity is available, rather than relying
+// on the native CHyprDropShadowDecoration hook which custom decorations bypass.
+void OverviewController::customShadowHook(void* renderer, const CBox& box, int round, float power, int range,
+                                         const Config::CGradientValueData& color, float alpha) {
+    if (!m_customShadowOriginal)
+        return;
+    const auto window = g_pHyprRenderer->m_renderData.currentWindow.lock();
+    const auto monitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    const auto transform = m_drawingViewflowShadow ? windowTransformFor(window, monitor) : std::nullopt;
+    if (!transform) {
+        m_customShadowOriginal(renderer, box, round, power, range, color, alpha);
+        return;
+    }
+    // Match Viewflow's monitor-local pixel origin, including workspace motion.
+    CBox source{window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT),
+                window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
+    if (window->m_workspace && !window->m_pinned)
+        source.translate(window->m_workspace->m_renderOffset->value());
+    source.translate(window->m_floatingOffset - monitor->m_position).scale(monitor->m_scale);
+    const auto target = toBox(rectToMonitorRenderLocal(transform->targetGlobal, monitor));
+    if (source.w <= 0 || source.h <= 0 || target.w < 1 || target.h < 1)
+        return;
+    const double scale = std::min(target.w / source.w, target.h / source.h);
+    CBox mapped = box;
+    mapped.translate(-source.pos()).scale(scale).translate(target.pos());
+    m_customShadowOriginal(renderer, mapped, std::max(0, static_cast<int>(std::lround(round * scale))), power,
+                           std::max(1, static_cast<int>(std::lround(range * scale))), color, managedPreviewAlphaFor(window, alpha));
+}
+
 void OverviewController::shadowDrawHook(void* shadowDecorationThisptr, const PHLMONITOR& monitor, const float& alpha) {
     if (!m_shadowDrawOriginal) {
         return;
@@ -4358,6 +4396,8 @@ void OverviewController::rendererDrawElementHook(void* rendererThisptr, WP<IPass
     if (shouldSuppressHyprglassPassElement(element.get()))
         return;
 
+    const ScopedFlag viewflowShadow(m_drawingViewflowShadow, element && element->passName() &&
+        std::string_view(element->passName()) == "Viewflow Mac simulated shadow");
     auto* renderData = surfaceRenderDataMutable(element.get());
     auto  monitor = renderData ? renderData->pMonitor.lock() : PHLMONITOR{};
     if (!rawWindowRenderActive() && renderData && renderData->pWindow && monitor && isVisible() && ownsMonitor(monitor) &&
@@ -7334,6 +7374,10 @@ bool OverviewController::installHooks() {
         return false;
     }
 
+    if (!hookFunction("drawShadow", "CHyprGLRenderer::drawShadow(Hyprutils::Math::CBox const&, int, float, int, Config::CGradientValueData const&, float)",
+                      m_customShadowHook, reinterpret_cast<void*>(&hkCustomShadow)))
+        debugLog("[hymission] Viewflow shadow hook unavailable");
+
     if (!hookFunction("draw", "CHyprGroupBarDecoration::draw(", m_groupBarDrawHook, reinterpret_cast<void*>(&hkGroupBarDraw))) {
         notify("[hymission] groupbar draw hook unavailable; grouped previews may retain the native bar", CHyprColor(1.0, 0.65, 0.2, 1.0), 4000);
     }
@@ -7494,6 +7538,12 @@ bool OverviewController::activateHooks() {
             m_renderLayerOriginal = nullptr;
         }
     }
+    if (m_customShadowHook) {
+        if (m_customShadowHook->hook())
+            m_customShadowOriginal = reinterpret_cast<CustomShadowFn>(m_customShadowHook->m_original);
+        else
+            debugLog("[hymission] Viewflow shadow hook activation failed");
+    }
     m_hooksActive = true;
     return true;
 }
@@ -7506,6 +7556,9 @@ void OverviewController::deactivateHooks() {
         m_shouldRenderWindowHook->unhook();
     if (m_effectiveAlphaHook)
         m_effectiveAlphaHook->unhook();
+    if (m_customShadowHook)
+        m_customShadowHook->unhook();
+    m_customShadowOriginal = nullptr;
     if (m_rendererDrawElementHook)
         m_rendererDrawElementHook->unhook();
     if (m_renderLayerHook)

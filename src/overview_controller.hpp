@@ -1,5 +1,6 @@
 #pragma once
 #include "search_child_process.hpp"
+#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 
 #include <array>
 #include <chrono>
@@ -105,6 +106,7 @@ class OverviewController {
     bool                shouldRenderWindowHook(const PHLWINDOW& window, const PHLMONITOR& monitor);
     float               effectiveAlphaHook(void* windowThisptr);
     void                borderDrawHook(void* borderDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
+    void                customShadowHook(void*, const CBox&, int, float, int, const Config::CGradientValueData&, float);
     void                shadowDrawHook(void* shadowDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
     void                groupBarDrawHook(void* groupBarDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
     void                calculateUVForSurfaceHook(const PHLWINDOW& window, SP<CWLSurfaceResource> surface, const PHLMONITOR& monitor, bool main, const Vector2D& projSize,
@@ -480,6 +482,7 @@ class OverviewController {
     using EffectiveAlphaFn = float (*)(void*);
     using RendererDrawElementFn = void (*)(void*, WP<IPassElement>, const CRegion&);
     using RenderLayerFn = void (*)(void*, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool);
+    using CustomShadowFn = void (*)(void*, const CBox&, int, float, int, const Config::CGradientValueData&, float);
     using BorderDrawFn = void (*)(void*, PHLMONITOR, const float&);
     using CalculateUVForSurfaceFn = void (*)(void*, PHLWINDOW, SP<CWLSurfaceResource>, PHLMONITOR, bool, const Vector2D&, const Vector2D&, bool);
     using DispatcherHandler = std::function<SDispatchResult(std::string)>;
@@ -874,6 +877,9 @@ class OverviewController {
     CFunctionHook*            m_renderLayerHook = nullptr;
     CFunctionHook*            m_borderDrawHook = nullptr;
     CFunctionHook*            m_shadowDrawHook = nullptr;
+    CFunctionHook*            m_customShadowHook = nullptr;
+    CustomShadowFn            m_customShadowOriginal = nullptr;
+    bool                      m_drawingViewflowShadow = false;
     CFunctionHook*            m_groupBarDrawHook = nullptr;
     CFunctionHook*            m_calculateUVForSurfaceHook = nullptr;
     CFunctionHook*            m_workspaceSwipeBeginFunctionHook = nullptr;
