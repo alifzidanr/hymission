@@ -113,6 +113,9 @@ to Stage only after Overview detaches (including failed activation rollback).
 While the finger moves, a provisional view advances with the gesture; the actual active
 workspace changes only after release passes the native distance/speed threshold.
 Cancellation reverses that view back to its origin without changing workspace.
+When a prepared swipe commits to a fullscreen workspace, Stage retains the
+remaining flight until it finishes. Fullscreen coverage hides the resting
+sidebar but does not cancel that flight or restart a native workspace slide.
 Direction locking, inversion and monitor-local workspace selection remain native
 policies. A previously nonexistent destination is previewed as an empty desktop
 during the swipe, including the outgoing windows' flight into the sidebar.

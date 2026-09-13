@@ -357,7 +357,12 @@ struct StageController::Impl {
     static void workspaceAnimationThunk(PHLWORKSPACE workspace, Animation::Workspace::eAnimationType type, bool left, bool instant,
                                         std::optional<std::string> style) {
         auto* self = instance;
-        const bool owned = self->ownsTransition(workspace);
+        // A prepared Stage swipe retains animation ownership through commit,
+        // even when its destination is fullscreen and hides the resting strip.
+        const bool settlingSwipe = self->swipe && self->swipe->prepared && self->swipe->committed && workspace &&
+            workspace->m_monitor == self->swipe->monitor &&
+            (workspace == self->swipe->origin || workspace == self->swipe->target);
+        const bool owned = settlingSwipe || self->ownsTransition(workspace);
         reinterpret_cast<WorkspaceAnimationFn>(self->workspaceAnimationHook->m_original)(workspace, type, left, instant || owned, std::move(style));
         if (owned)
             workspace->m_renderOffset->setValueAndWarp(Vector2D{});
@@ -690,7 +695,7 @@ void StageController::Impl::endSwipe() {
             return;
         if (swipe->prepared) {
             auto* actual = screenFor(monitor);
-            if (!actual || actual->covered || actual->suspended) {
+            if (!actual || actual->suspended) {
                 clearSwipe();
                 return;
             }
@@ -704,6 +709,12 @@ void StageController::Impl::endSwipe() {
                 const auto next = std::ranges::find_if(actual->flights, [&](const auto& f) { return f.preview.window == window; });
                 if (next != actual->flights.end())
                     flight.to = next->to;
+                else if (actual->covered && window->m_workspace == target) {
+                    window->positionAnimation()->warp();
+                    window->sizeAnimation()->warp();
+                    flight.to = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
+                        CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
+                }
             }
             actual->flights.clear();
             actual->paneTransition = false;
@@ -1172,7 +1183,8 @@ void StageController::Impl::motion() {
     if (swipe) {
         const auto monitor = swipe->monitor.lock();
         const auto* actual = screenFor(monitor);
-        if (!monitor || !actual || blocked() || actual->covered || actual->suspended || (swipe->prepared && !sameBox(actual->base, swipe->visual.base)) ||
+        const bool finishingStageSwipe = swipe->prepared && swipe->committed && swipe->released;
+        if (!monitor || !actual || blocked() || (actual->covered && !finishingStageSwipe) || actual->suspended || (swipe->prepared && !sameBox(actual->base, swipe->visual.base)) ||
             (swipe->committed ? monitor->m_activeWorkspace != swipe->target : monitor->m_activeWorkspace != swipe->origin)) {
             clearSwipe();
         } else {
