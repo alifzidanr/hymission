@@ -198,6 +198,7 @@ struct StageController::Impl {
         bool prepared = false;
         bool released = false;
         bool committed = false;
+        bool targetCovered = false;
         bool cancelled = false;
         double progress = 0;
         double releaseFrom = 0;
@@ -526,6 +527,8 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
         return;
     swipe->prepared = false;
     swipe->target = target;
+    const auto targetMode = target ? Fullscreen::controller()->getFullscreenModes(target).internal : Fullscreen::FSMODE_NONE;
+    swipe->targetCovered = targetMode == Fullscreen::FSMODE_FULLSCREEN || (maximizeCover && targetMode == Fullscreen::FSMODE_MAXIMIZED);
     if (!numberSetting("animations:enabled", 1) || setting("stage_transition_ms", 300) <= 0)
         return;
     auto& visual = swipe->visual;
@@ -1182,7 +1185,7 @@ void StageController::Impl::motion() {
     const auto now = Clock::now();
     if (swipe) {
         const auto monitor = swipe->monitor.lock();
-        const auto* actual = screenFor(monitor);
+        auto* actual = screenFor(monitor);
         const bool finishingStageSwipe = swipe->prepared && swipe->committed && swipe->released;
         if (!monitor || !actual || blocked() || (actual->covered && !finishingStageSwipe) || actual->suspended || (swipe->prepared && !sameBox(actual->base, swipe->visual.base)) ||
             (swipe->committed ? monitor->m_activeWorkspace != swipe->target : monitor->m_activeWorkspace != swipe->origin)) {
@@ -1193,6 +1196,8 @@ void StageController::Impl::motion() {
                 const double p = swipe->releaseDuration > 0 ? std::clamp(elapsed / swipe->releaseDuration, 0.0, 1.0) : 1;
                 swipe->settleProgress = p;
                 swipe->progress = swipe->releaseFrom + (swipe->releaseTo - swipe->releaseFrom) * p;
+                if (swipe->committed && swipe->targetCovered)
+                    actual->shown = 1 - stage::transitionProgress(swipe->progress, 1);
                 if (p >= 1)
                     clearSwipe();
             }
@@ -1233,8 +1238,10 @@ void StageController::Impl::motion() {
             damage(screen);
         }
         const double target = screen.covered ? 0 : 1;
-        if (screen.shown != target) {
-            const auto t = std::clamp(std::chrono::duration<double, std::milli>(now - screen.slideStart).count() / 180.0, 0.0, 1.0);
+        const bool swipeOwnsVisibility = swipe && swipe->prepared && swipe->committed && swipe->targetCovered && swipe->monitor == screen.monitor;
+        if (screen.shown != target && !swipeOwnsVisibility) {
+            const double duration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
+            const auto t = duration > 0 ? std::clamp(std::chrono::duration<double, std::milli>(now - screen.slideStart).count() / duration, 0.0, 1.0) : 1;
             const auto eased = 1 - std::pow(1 - t, 3);
             screen.shown = t == 1 ? target : screen.slideFrom + (target - screen.slideFrom) * eased;
             damage(screen);
@@ -1747,11 +1754,18 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
         }
       }
     };
-    if (screen->paneTransition) {
+    if (swipe && &swipe->visual == screen && swipe->targetCovered) {
+        const double p = stage::transitionProgress(swipe->progress, 1);
+        const double width = screen->departingGeometry.bandWidth;
+        const double travel = screen->departingRight ? monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) + width :
+            screen->base.x - monitor->m_position.x + width;
+        drawPane(screen->departingCards, screen->departingGeometry, screen->departingScroll, screen->departingRight,
+            (screen->departingRight ? 1 : -1) * travel * p);
+    } else if (screen->paneTransition) {
         const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - screen->paneStart).count();
         const double t = swipe && &swipe->visual == screen ? swipe->progress :
             screen->paneDuration > 0 ? std::clamp(elapsed / screen->paneDuration, 0.0, 1.0) : 1;
-        const double p = t * t * (3 - 2 * t);
+        const double p = stage::transitionProgress(t, 1);
         const auto travel = [&](bool right, double width) {
             return right ? monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) + width :
                            screen->base.x - monitor->m_position.x + width;
@@ -2254,7 +2268,7 @@ std::optional<Rect> StageController::overviewOrigin(const PHLWINDOW& window) {
                     screen->paneDuration > 0 ? std::clamp(elapsed / screen->paneDuration, 0.0, 1.0) : 1;
                 const double travel = screen->right ? monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) + screen->geometry.bandWidth :
                     screen->base.x - monitor->m_position.x + screen->geometry.bandWidth;
-                offset = (screen->right ? 1 : -1) * travel * (1 - t * t * (3 - 2 * t));
+                offset = (screen->right ? 1 : -1) * travel * (1 - stage::transitionProgress(t, 1));
             } else
                 offset = (screen->right ? 1 : -1) * (1 - screen->shown) * screen->geometry.bandWidth;
             return Rect{self->sidebar(*screen).x + screen->geometry.padding + offset + preview.target.x,

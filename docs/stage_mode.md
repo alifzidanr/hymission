@@ -116,6 +116,11 @@ Cancellation reverses that view back to its origin without changing workspace.
 When a prepared swipe commits to a fullscreen workspace, Stage retains the
 remaining flight until it finishes. Fullscreen coverage hides the resting
 sidebar but does not cancel that flight or restart a native workspace slide.
+The departing sidebar uses the same swipe progress and cubic easing as the
+switch, including held gestures, release and cancellation. It does not start
+an independent hide animation on commit. Side-exchange panes use that same
+easing; ordinary sidebar show/hide uses `stage_transition_ms` instead of a
+separate fixed duration.
 Direction locking, inversion and monitor-local workspace selection remain native
 policies. A previously nonexistent destination is previewed as an empty desktop
 during the swipe, including the outgoing windows' flight into the sidebar.
