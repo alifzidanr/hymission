@@ -205,5 +205,9 @@ int main() {
         ok &= expect(staggeredProgress(0.3, i, 5, true) <= held && staggeredProgress(0.9, i, 5, true) >= held,
             "finger reveal advances and reverses with displacement for every card");
     }
+    const auto outside = slideBox({0, 1080, 1920, 1080}, {0, 0, 1920, 1080}, 0);
+    const auto arrived = slideBox({0, 1080, 1920, 1080}, {0, 0, 1920, 1080}, 1);
+    const auto leaving = slideBox({0, 0, 1920, 1080}, {0, -1080, 1920, 1080}, 1);
+    ok &= expect(near(outside.y, 1080) && near(arrived.y, 0) && near(leaving.y, -1080) && near(leaving.height, 1080), "fullscreen slides retain size and reach offscreen endpoints");
     return ok ? 0 : 1;
 }

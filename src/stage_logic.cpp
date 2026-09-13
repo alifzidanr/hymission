@@ -114,6 +114,12 @@ double transitionProgress(double elapsed, double duration) {
     return 1 - std::pow(1 - t, 3);
 }
 
+Rect slideBox(const Rect& from, const Rect& to, double progress) {
+    const double p = transitionProgress(progress, 1);
+    return {from.x + (to.x - from.x) * p, from.y + (to.y - from.y) * p,
+        from.width + (to.width - from.width) * p, from.height + (to.height - from.height) * p};
+}
+
 double staggeredProgress(double progress, std::size_t rank, std::size_t count, bool fromBottom) {
     const auto index = count > 0 ? std::min(rank, count - 1) : 0;
     const auto ordered = fromBottom && count > 0 ? count - 1 - index : index;

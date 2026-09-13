@@ -294,3 +294,7 @@ the checks above require the updated plugin running in a compositor session.
 On this repository's hyprpm setup, commit before updating. The user runs
 `hyprpm update` from a safe context; do not mix manual plugin loading with that
 managed instance.
+
+Workspace swipes involving fullscreen slide the incoming workspace from beyond
+the output edge and the outgoing workspace beyond the opposite edge. Window
+size is retained during the slide; rendering remains clipped to the output.

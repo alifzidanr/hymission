@@ -139,6 +139,7 @@ struct StageController::Impl {
         float fromRadius = 0;
         float toRadius = 0;
         bool dropToCard = false;
+        bool offscreen = false;
     };
     struct DragHover {
         PHLWINDOWREF window;
@@ -542,7 +543,7 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
     swipe->sourceCovered = source->covered;
     visual.covered = false;
     visual.shown = 1;
-    visual.revealFromBottom = swipe->native->m_delta < 0;
+    visual.revealFromBottom = swipe->native->m_delta > 0;
     // A new workspace has no native object until the gesture commits. Build
     // its empty desktop now so outgoing windows still follow the finger.
     visual.active = target ? target->m_id : swipe->requestedTarget;
@@ -599,6 +600,22 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
                     flight.to = preview->target.copy().translate(Vector2D{sidebar(visual).x + visual.geometry.padding,
                         visual.base.y + visual.geometry.cardTop(i, visual.scroll)});
             }
+        }
+    }
+    if (swipe->sourceCovered || swipe->targetCovered) {
+        const double direction = swipe->native->m_delta < 0 ? -1 : 1;
+        const Vector2D travel{0.0, direction * monitor->m_size.y};
+        for (auto& flight : visual.flights) {
+            const auto window = flight.preview.window.lock();
+            if (!window)
+                continue;
+            flight.offscreen = true;
+            if (window->m_workspace == target) {
+                flight.from = flight.to.copy().translate(travel);
+            } else {
+                flight.to = flight.from.copy().translate(-travel);
+            }
+            flight.fromRadius = flight.toRadius = window->rounding();
         }
     }
     swipe->prepared = true;
@@ -686,7 +703,8 @@ void StageController::Impl::endSwipe() {
     if (commit) {
         if (swipe->prepared) {
             for (auto& flight : swipe->visual.flights) {
-                const auto box = stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+                const auto box = flight.offscreen ? stage::slideBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+                    {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, swipe->progress) : stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
                     {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, swipe->progress,
                     flightBounds(monitor));
                 flight.from = {box.x, box.y, box.width, box.height};
@@ -720,6 +738,15 @@ void StageController::Impl::endSwipe() {
                 if (!window)
                     continue;
                 const auto next = std::ranges::find_if(actual->flights, [&](const auto& f) { return f.preview.window == window; });
+                if (flight.offscreen) {
+                    if (window->m_workspace == target) {
+                        window->positionAnimation()->warp();
+                        window->sizeAnimation()->warp();
+                        flight.to = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
+                            CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
+                    }
+                    continue;
+                }
                 if (next != actual->flights.end())
                     flight.to = next->to;
                 else if (actual->covered && window->m_workspace == target) {
@@ -2096,7 +2123,8 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
                         screen.base.y + cardTop(screen, std::distance(screen.cards.begin(), card))});
             }
         }
-        const auto box = stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+        const auto box = flight.offscreen ? stage::slideBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+            {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, p) : stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
             {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, p,
             bounds);
         drawPreview(window, monitor, CBox{box.x, box.y, box.width, box.height}, clip,
@@ -2286,7 +2314,8 @@ std::optional<Rect> StageController::overviewOrigin(const PHLWINDOW& window) {
     }
     for (const auto& flight : screen->flights)
         if (flight.preview.window == window)
-            return stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+            return flight.offscreen ? stage::slideBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+                {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, self->flightProgress(*screen)) : stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
                 {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, self->flightProgress(*screen), flightBounds(monitor));
     if (window->m_workspace == monitor->m_activeWorkspace)
         return std::nullopt; // Desktop windows already have the correct natural origin.
