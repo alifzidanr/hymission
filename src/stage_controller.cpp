@@ -602,20 +602,22 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
             }
         }
     }
-    if (swipe->sourceCovered || swipe->targetCovered) {
-        const double direction = swipe->native->m_delta < 0 ? -1 : 1;
-        const Vector2D travel{0.0, direction * monitor->m_size.y};
-        for (auto& flight : visual.flights) {
-            const auto window = flight.preview.window.lock();
-            if (!window)
-                continue;
+    // Keep the card-sized endpoints, translating only the hidden sidebar end
+    // beyond its own output edge. The other end remains the native desktop.
+    const auto hiddenSidebarOffset = [&](bool right, double width) {
+        return right ? monitor->m_position.x + monitor->m_size.x - (visual.base.x + visual.base.w) + width :
+            -(visual.base.x - monitor->m_position.x + width);
+    };
+    for (auto& flight : visual.flights) {
+        const auto window = flight.preview.window.lock();
+        if (!window)
+            continue;
+        if (window->m_workspace == target && swipe->sourceCovered) {
+            flight.from.translate(Vector2D{hiddenSidebarOffset(source->right, source->geometry.bandWidth), 0.0});
             flight.offscreen = true;
-            if (window->m_workspace == target) {
-                flight.from = flight.to.copy().translate(travel);
-            } else {
-                flight.to = flight.from.copy().translate(-travel);
-            }
-            flight.fromRadius = flight.toRadius = window->rounding();
+        } else if (window->m_workspace != target && swipe->targetCovered) {
+            flight.to.translate(Vector2D{hiddenSidebarOffset(visual.right, visual.geometry.bandWidth), 0.0});
+            flight.offscreen = true;
         }
     }
     swipe->prepared = true;
@@ -703,7 +705,7 @@ void StageController::Impl::endSwipe() {
     if (commit) {
         if (swipe->prepared) {
             for (auto& flight : swipe->visual.flights) {
-                const auto box = flight.offscreen ? stage::slideBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+                const auto box = flight.offscreen ? stage::transitionBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
                     {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, swipe->progress) : stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
                     {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, swipe->progress,
                     flightBounds(monitor));
@@ -2123,7 +2125,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
                         screen.base.y + cardTop(screen, std::distance(screen.cards.begin(), card))});
             }
         }
-        const auto box = flight.offscreen ? stage::slideBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+        const auto box = flight.offscreen ? stage::transitionBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
             {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, p) : stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
             {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, p,
             bounds);
@@ -2314,7 +2316,7 @@ std::optional<Rect> StageController::overviewOrigin(const PHLWINDOW& window) {
     }
     for (const auto& flight : screen->flights)
         if (flight.preview.window == window)
-            return flight.offscreen ? stage::slideBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+            return flight.offscreen ? stage::transitionBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
                 {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, self->flightProgress(*screen)) : stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
                 {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, self->flightProgress(*screen), flightBounds(monitor));
     if (window->m_workspace == monitor->m_activeWorkspace)

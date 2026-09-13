@@ -295,6 +295,8 @@ On this repository's hyprpm setup, commit before updating. The user runs
 `hyprpm update` from a safe context; do not mix manual plugin loading with that
 managed instance.
 
-Workspace swipes involving fullscreen slide the incoming workspace from beyond
-the output edge and the outgoing workspace beyond the opposite edge. Window
-size is retained during the slide; rendering remains clipped to the output.
+Workspace swipes involving fullscreen retain the desktop-to-card scaling path.
+When leaving fullscreen, incoming windows grow from their thumbnail positions in
+the hidden sidebar just outside the output. When entering fullscreen, outgoing
+windows shrink to those hidden sidebar positions. Only the thumbnail endpoint
+is translated beyond the sidebar edge; rendering stays clipped to this output.

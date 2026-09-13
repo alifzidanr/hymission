@@ -205,9 +205,12 @@ int main() {
         ok &= expect(staggeredProgress(0.3, i, 5, true) <= held && staggeredProgress(0.9, i, 5, true) >= held,
             "finger reveal advances and reverses with displacement for every card");
     }
-    const auto outside = slideBox({0, 1080, 1920, 1080}, {0, 0, 1920, 1080}, 0);
-    const auto arrived = slideBox({0, 1080, 1920, 1080}, {0, 0, 1920, 1080}, 1);
-    const auto leaving = slideBox({0, 0, 1920, 1080}, {0, -1080, 1920, 1080}, 1);
-    ok &= expect(near(outside.y, 1080) && near(arrived.y, 0) && near(leaving.y, -1080) && near(leaving.height, 1080), "fullscreen slides retain size and reach offscreen endpoints");
+    const hymission::Rect hiddenCard{-180, 300, 160, 90};
+    const hymission::Rect desktopWindow{240, 120, 1280, 720};
+    const auto entering = transitionBox(hiddenCard, desktopWindow, 0);
+    const auto entered = transitionBox(hiddenCard, desktopWindow, 1);
+    const auto leaving = transitionBox(desktopWindow, hiddenCard, 1);
+    ok &= expect(near(entering.x, -180) && near(entering.width, 160) && near(entered.width, 1280) &&
+        near(leaving.x, -180) && near(leaving.width, 160), "hidden sidebar endpoints retain thumbnail size and remain outside the output");
     return ok ? 0 : 1;
 }
