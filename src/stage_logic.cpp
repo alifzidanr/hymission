@@ -114,6 +114,13 @@ double transitionProgress(double elapsed, double duration) {
     return 1 - std::pow(1 - t, 3);
 }
 
+double staggeredProgress(double progress, std::size_t rank, std::size_t count, bool fromBottom) {
+    const auto index = count > 0 ? std::min(rank, count - 1) : 0;
+    const auto ordered = fromBottom && count > 0 ? count - 1 - index : index;
+    const double delay = count > 1 ? 0.35 * ordered / (count - 1) : 0;
+    return transitionProgress(std::max(0.0, progress - delay), 1 - delay);
+}
+
 Rect transitionBox(const Rect& from, const Rect& to, double p) {
     p = std::clamp(sane(p, 1), 0.0, 1.0);
     const double scale = transitionProgress(p, 1);

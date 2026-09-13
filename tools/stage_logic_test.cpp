@@ -195,5 +195,10 @@ int main() {
     ok &= expect(leftDesktop.x + leftDesktop.width <= rightBand.x && rightDesktop.x >= leftBand.x + leftBand.width, "desktop and sidebar do not overlap on either side");
     const auto rightDrop = mapDropPoint(rightBand, leftDesktop, rightBand.x + rightBand.width / 2, rightBand.y + rightBand.height / 2);
     ok &= expect(near(rightDrop.first, leftDesktop.x + leftDesktop.width / 2) && near(rightDrop.second, leftDesktop.y + leftDesktop.height / 2), "right sidebar drops map into the left desktop on a negative-coordinate monitor");
+    ok &= expect(staggeredProgress(0.2, 0, 3, false) > 0 && near(staggeredProgress(0.2, 2, 3, false), 0), "top-down reveal starts the top card first");
+    ok &= expect(staggeredProgress(0.2, 2, 3, true) > 0 && near(staggeredProgress(0.2, 0, 3, true), 0), "bottom-up reveal reverses the order");
+    for (std::size_t i = 0; i < 5; ++i)
+        ok &= expect(near(staggeredProgress(0, i, 5, false), 0) && near(staggeredProgress(1, i, 5, false), 1), "all cards share the transition endpoints");
+    ok &= expect(near(staggeredProgress(0.5, 0, 1, false), transitionProgress(0.5, 1)), "one visible card uses the normal transition");
     return ok ? 0 : 1;
 }

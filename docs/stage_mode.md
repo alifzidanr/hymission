@@ -36,6 +36,11 @@ completely unreachable placements are brought back into view, outside a drag.
 Maximized workspaces bypass this inset only when configured to cover the strip.
 True fullscreen keeps its normal full-output geometry. The sidebar's visual
 slide does not resize the native desktop on every animation frame.
+When the sidebar returns, visible cards enter in sequence following the incoming
+workspace's vertical motion: downward motion reveals top to bottom, upward motion
+bottom to top. The stagger uses the same `stage_transition_ms` timeline, so every
+card arrives by the end of the transition. Offscreen cards add no delay, and card
+input resumes when the reveal completes.
 
 No cards means no reservation. On unusually small outputs the controller may
 go below the configured minimum card width, retaining at least 64 logical pixels

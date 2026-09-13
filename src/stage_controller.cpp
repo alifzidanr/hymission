@@ -168,6 +168,7 @@ struct StageController::Impl {
         std::optional<double> frozenWidth;
         bool covered = false;
         bool suspended = false;
+        bool revealFromBottom = false;
         double shown = 1;
         double slideFrom = 1;
         Clock::time_point slideStart = Clock::now();
@@ -363,6 +364,12 @@ struct StageController::Impl {
         const bool settlingSwipe = self->swipe && self->swipe->prepared && self->swipe->committed && workspace &&
             workspace->m_monitor == self->swipe->monitor &&
             (workspace == self->swipe->origin || workspace == self->swipe->target);
+        if (workspace && type == Animation::Workspace::ANIMATION_TYPE_IN) {
+            if (auto* screen = self->screenFor(workspace->m_monitor.lock()))
+                screen->revealFromBottom = left;
+            if (self->swipe && workspace == self->swipe->target)
+                self->swipe->visual.revealFromBottom = left;
+        }
         const bool owned = settlingSwipe || self->ownsTransition(workspace);
         reinterpret_cast<WorkspaceAnimationFn>(self->workspaceAnimationHook->m_original)(workspace, type, left, instant || owned, std::move(style));
         if (owned)
@@ -1719,24 +1726,34 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
     const auto physical = [&](CBox box) { return box.translate(-monitor->m_position).scale(monitor->m_scale); };
     const auto previousClip = g_pHyprRenderer->m_renderData.clipBox;
     const CBox outputClip = physical(CBox{monitor->m_position, monitor->m_size});
-    const auto drawPane = [&](const std::vector<Card>& cards, const stage::Geometry& geometry, double scroll, bool right, double offset) {
+    const auto drawPane = [&](const std::vector<Card>& cards, const stage::Geometry& geometry, double scroll, bool right, double offset, double reveal = -1) {
       const auto area = stage::sidebarArea({screen->base.x, screen->base.y, screen->base.w, screen->base.h}, geometry, right);
-      const auto stripClip = physical(CBox{area.x + offset, area.y + geometry.paddingTop, area.width,
-                                           area.height - geometry.paddingTop - geometry.paddingBottom}).intersection(outputClip);
-      if (stripClip.w <= 0 || stripClip.h <= 0)
-          return;
-      for (std::size_t i = 0; i < cards.size(); ++i) {
+      const auto topAt = [&](std::size_t i) {
         const auto& card = cards[i];
         const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - card.shiftStart).count();
-        const double shiftProgress = swipe && &swipe->visual == screen ? stage::transitionProgress(swipe->progress, 1) :
+        const double progress = swipe && &swipe->visual == screen ? stage::transitionProgress(swipe->progress, 1) :
             stage::transitionProgress(elapsed, std::clamp(setting("stage_transition_ms", 300), 0L, 2000L));
-        const double top = geometry.cardTop(i, scroll) + card.shift * (1 - shiftProgress);
-        if (top + geometry.cardHeight <= geometry.paddingTop || top >= screen->base.h - geometry.paddingBottom)
+        return geometry.cardTop(i, scroll) + card.shift * (1 - progress);
+      };
+      std::vector<std::size_t> visible;
+      for (std::size_t i = 0; i < cards.size(); ++i) {
+        const double top = topAt(i);
+        if (top + geometry.cardHeight > geometry.paddingTop && top < screen->base.h - geometry.paddingBottom)
+            visible.push_back(i);
+      }
+      for (std::size_t rank = 0; rank < visible.size(); ++rank) {
+        const auto i = visible[rank];
+        const auto& card = cards[i];
+        const double top = topAt(i);
+        const double cardOffset = reveal < 0 ? offset : offset * (1 - stage::staggeredProgress(reveal, rank, visible.size(), screen->revealFromBottom));
+        const auto stripClip = physical(CBox{area.x + cardOffset, area.y + geometry.paddingTop, area.width,
+            area.height - geometry.paddingTop - geometry.paddingBottom}).intersection(outputClip);
+        if (stripClip.w <= 0 || stripClip.h <= 0)
             continue;
         const auto workspace = card.workspace.lock();
         if (!workspace)
             continue;
-        const CBox box{area.x + geometry.padding + offset, screen->base.y + top, geometry.cardWidth, geometry.cardHeight};
+        const CBox box{area.x + geometry.padding + cardOffset, screen->base.y + top, geometry.cardWidth, geometry.cardHeight};
         if (card.previewsReady) {
             const auto cardClip = physical(box).intersection(stripClip);
             if (cardClip.w <= 0 || cardClip.h <= 0)
@@ -1776,7 +1793,14 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             (screen->right ? 1 : -1) * travel(screen->right, screen->geometry.bandWidth) * (1 - p));
     } else {
         const double slide = (screen->right ? 1 : -1) * (1 - screen->shown) * screen->geometry.bandWidth;
-        drawPane(screen->cards, screen->geometry, screen->scroll, screen->right, slide);
+        if (!screen->covered && screen->shown < 1) {
+            const double duration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
+            const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - screen->slideStart).count();
+            const double t = duration > 0 ? std::clamp(elapsed / duration, 0.0, 1.0) : 1;
+            drawPane(screen->cards, screen->geometry, screen->scroll, screen->right,
+                (screen->right ? 1 : -1) * (1 - screen->slideFrom) * screen->geometry.bandWidth, t);
+        } else
+            drawPane(screen->cards, screen->geometry, screen->scroll, screen->right, slide);
     }
     g_pHyprRenderer->m_renderData.clipBox = previousClip;
     drawFlights(*screen, monitor);
@@ -1810,6 +1834,8 @@ double StageController::Impl::cardTop(const Screen& screen, std::size_t index) c
 }
 
 std::optional<std::size_t> StageController::Impl::cardHit(const Screen& screen, const Vector2D& point) const {
+    if (!screen.covered && screen.shown < 1)
+        return std::nullopt;
     const auto& g = screen.geometry;
     const auto local = point - sidebar(screen).pos();
     if (local.x < g.padding || local.x >= g.padding + g.cardWidth || local.y < g.paddingTop || local.y >= screen.base.h - g.paddingBottom)

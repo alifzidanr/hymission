@@ -47,6 +47,7 @@ Geometry layout(double width, double height, std::size_t count, Settings setting
 std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& geometry, const Rect& desktop);
 double previewRounding(double configured, double system, double width, double height);
 double transitionProgress(double elapsed, double duration);
+double staggeredProgress(double progress, std::size_t rank, std::size_t count, bool fromBottom);
 // progress is the linear timeline, before either easing curve is applied.
 Rect transitionBox(const Rect& from, const Rect& to, double progress);
 Rect transitionBoxWithin(const Rect& from, const Rect& to, double progress, const Rect& bounds);
