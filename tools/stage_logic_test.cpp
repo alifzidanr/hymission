@@ -200,5 +200,10 @@ int main() {
     for (std::size_t i = 0; i < 5; ++i)
         ok &= expect(near(staggeredProgress(0, i, 5, false), 0) && near(staggeredProgress(1, i, 5, false), 1), "all cards share the transition endpoints");
     ok &= expect(near(staggeredProgress(0.5, 0, 1, false), transitionProgress(0.5, 1)), "one visible card uses the normal transition");
+    for (std::size_t i = 0; i < 5; ++i) {
+        const double held = staggeredProgress(0.6, i, 5, true);
+        ok &= expect(staggeredProgress(0.3, i, 5, true) <= held && staggeredProgress(0.9, i, 5, true) >= held,
+            "finger reveal advances and reverses with displacement for every card");
+    }
     return ok ? 0 : 1;
 }

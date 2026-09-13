@@ -39,7 +39,10 @@ slide does not resize the native desktop on every animation frame.
 When the sidebar returns, visible cards enter in sequence following the incoming
 workspace's vertical motion: downward motion reveals top to bottom, upward motion
 bottom to top. The stagger uses the same `stage_transition_ms` timeline, so every
-card arrives by the end of the transition. Offscreen cards add no delay, and card
+card arrives by the end of the transition. Returning from fullscreen during a
+workspace swipe drives this reveal directly from finger displacement, including
+holds and reversal. Release settles from that same progress without restarting
+the reveal. Offscreen cards add no delay, and card
 input resumes when the reveal completes.
 
 No cards means no reservation. On unusually small outputs the controller may

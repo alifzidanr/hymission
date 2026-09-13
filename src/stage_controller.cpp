@@ -200,6 +200,7 @@ struct StageController::Impl {
         bool released = false;
         bool committed = false;
         bool targetCovered = false;
+        bool sourceCovered = false;
         bool cancelled = false;
         double progress = 0;
         double releaseFrom = 0;
@@ -314,7 +315,7 @@ struct StageController::Impl {
     stage::Settings settingsForSide(bool right) const;
     bool blocked() const;
     bool interactive(const Screen& screen) const;
-    bool ownsTransition(const PHLWORKSPACE& workspace) const;
+    bool ownsTransition(const PHLWORKSPACE& workspace, bool allowCovered = false) const;
     Screen* screenFor(const PHLMONITOR& monitor);
     std::pair<Screen*, std::optional<std::size_t>> hit(const Vector2D& point);
     void pointer();
@@ -348,7 +349,7 @@ struct StageController::Impl {
         if (self->swipe)
             self->clearSwipe();
         self->swipeBeginOriginal(gesture);
-        if (monitor && self->ownsTransition(monitor->m_activeWorkspace) && gesture->isGestureInProgress()) {
+        if (monitor && self->ownsTransition(monitor->m_activeWorkspace, true) && gesture->isGestureInProgress()) {
             ++self->swipeBegins;
             self->swipe.emplace();
             self->swipe->native = gesture;
@@ -367,8 +368,6 @@ struct StageController::Impl {
         if (workspace && type == Animation::Workspace::ANIMATION_TYPE_IN) {
             if (auto* screen = self->screenFor(workspace->m_monitor.lock()))
                 screen->revealFromBottom = left;
-            if (self->swipe && workspace == self->swipe->target)
-                self->swipe->visual.revealFromBottom = left;
         }
         const bool owned = settlingSwipe || self->ownsTransition(workspace);
         reinterpret_cast<WorkspaceAnimationFn>(self->workspaceAnimationHook->m_original)(workspace, type, left, instant || owned, std::move(style));
@@ -461,17 +460,17 @@ bool StageController::Impl::blocked() const {
     return (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked()) || (overviewSuspended && overviewSuspended());
 }
 
-bool StageController::Impl::ownsTransition(const PHLWORKSPACE& workspace) const {
+bool StageController::Impl::ownsTransition(const PHLWORKSPACE& workspace, bool allowCovered) const {
     if (!enabled || !workspace || workspace->m_isSpecialWorkspace || blocked())
         return false;
     const auto monitor = workspace->m_monitor.lock();
     if (!monitor || monitor->m_activeSpecialWorkspace)
         return false;
     const auto screen = std::ranges::find_if(screens, [&](const auto& s) { return s.monitor == monitor; });
-    if (screen == screens.end() || !screen->geometry.enabled() || screen->covered || screen->suspended)
+    if (screen == screens.end() || !screen->geometry.enabled() || (!allowCovered && screen->covered) || screen->suspended)
         return false;
     const auto targetMode = monitor->m_activeWorkspace ? Fullscreen::controller()->getFullscreenModes(monitor->m_activeWorkspace).internal : Fullscreen::FSMODE_NONE;
-    return targetMode != Fullscreen::FSMODE_FULLSCREEN && !(maximizeCover && targetMode == Fullscreen::FSMODE_MAXIMIZED);
+    return allowCovered || (targetMode != Fullscreen::FSMODE_FULLSCREEN && !(maximizeCover && targetMode == Fullscreen::FSMODE_MAXIMIZED));
 }
 
 bool StageController::Impl::interactive(const Screen& screen) const {
@@ -540,6 +539,10 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
         return;
     auto& visual = swipe->visual;
     visual = *source;
+    swipe->sourceCovered = source->covered;
+    visual.covered = false;
+    visual.shown = 1;
+    visual.revealFromBottom = swipe->native->m_delta < 0;
     // A new workspace has no native object until the gesture commits. Build
     // its empty desktop now so outgoing windows still follow the finger.
     visual.active = target ? target->m_id : swipe->requestedTarget;
@@ -608,7 +611,7 @@ void StageController::Impl::updateSwipe(double delta) {
         return;
     ++swipeUpdates;
     const auto monitor = swipe->monitor.lock();
-    if (!monitor || monitor->m_activeWorkspace != swipe->origin || !ownsTransition(monitor->m_activeWorkspace) || Desktop::focusState()->monitor() != monitor) {
+    if (!monitor || monitor->m_activeWorkspace != swipe->origin || !ownsTransition(monitor->m_activeWorkspace, true) || Desktop::focusState()->monitor() != monitor) {
         clearSwipe();
         return;
     }
@@ -664,7 +667,7 @@ void StageController::Impl::endSwipe() {
     if (!swipe || swipe->released)
         return;
     const auto monitor = swipe->monitor.lock();
-    if (!monitor || monitor->m_activeWorkspace != swipe->origin || !ownsTransition(monitor->m_activeWorkspace)) {
+    if (!monitor || monitor->m_activeWorkspace != swipe->origin || !ownsTransition(monitor->m_activeWorkspace, true)) {
         clearSwipe();
         return;
     }
@@ -1194,7 +1197,7 @@ void StageController::Impl::motion() {
         const auto monitor = swipe->monitor.lock();
         auto* actual = screenFor(monitor);
         const bool finishingStageSwipe = swipe->prepared && swipe->committed && swipe->released;
-        if (!monitor || !actual || blocked() || (actual->covered && !finishingStageSwipe) || actual->suspended || (swipe->prepared && !sameBox(actual->base, swipe->visual.base)) ||
+        if (!monitor || !actual || blocked() || (actual->covered && !finishingStageSwipe && !swipe->sourceCovered) || actual->suspended || (swipe->prepared && !sameBox(actual->base, swipe->visual.base)) ||
             (swipe->committed ? monitor->m_activeWorkspace != swipe->target : monitor->m_activeWorkspace != swipe->origin)) {
             clearSwipe();
         } else {
@@ -1203,8 +1206,8 @@ void StageController::Impl::motion() {
                 const double p = swipe->releaseDuration > 0 ? std::clamp(elapsed / swipe->releaseDuration, 0.0, 1.0) : 1;
                 swipe->settleProgress = p;
                 swipe->progress = swipe->releaseFrom + (swipe->releaseTo - swipe->releaseFrom) * p;
-                if (swipe->committed && swipe->targetCovered)
-                    actual->shown = 1 - stage::transitionProgress(swipe->progress, 1);
+                if (swipe->committed && (swipe->targetCovered || swipe->sourceCovered))
+                    actual->shown = swipe->targetCovered ? 1 - stage::transitionProgress(swipe->progress, 1) : stage::transitionProgress(swipe->progress, 1);
                 if (p >= 1)
                     clearSwipe();
             }
@@ -1245,7 +1248,7 @@ void StageController::Impl::motion() {
             damage(screen);
         }
         const double target = screen.covered ? 0 : 1;
-        const bool swipeOwnsVisibility = swipe && swipe->prepared && swipe->committed && swipe->targetCovered && swipe->monitor == screen.monitor;
+        const bool swipeOwnsVisibility = swipe && swipe->prepared && swipe->committed && (swipe->targetCovered || swipe->sourceCovered) && swipe->monitor == screen.monitor;
         if (screen.shown != target && !swipeOwnsVisibility) {
             const double duration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
             const auto t = duration > 0 ? std::clamp(std::chrono::duration<double, std::milli>(now - screen.slideStart).count() / duration, 0.0, 1.0) : 1;
@@ -1771,7 +1774,14 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
         }
       }
     };
-    if (swipe && &swipe->visual == screen && swipe->targetCovered) {
+    if (swipe && &swipe->visual == screen && swipe->sourceCovered) {
+        if (!swipe->targetCovered) {
+            const double travel = screen->right ? monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) + screen->geometry.bandWidth :
+                screen->base.x - monitor->m_position.x + screen->geometry.bandWidth;
+            drawPane(screen->cards, screen->geometry, screen->scroll, screen->right,
+                (screen->right ? 1 : -1) * travel, swipe->progress);
+        }
+    } else if (swipe && &swipe->visual == screen && swipe->targetCovered) {
         const double p = stage::transitionProgress(swipe->progress, 1);
         const double width = screen->departingGeometry.bandWidth;
         const double travel = screen->departingRight ? monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) + width :
@@ -2307,7 +2317,7 @@ std::optional<Rect> StageController::overviewOrigin(const PHLWINDOW& window) {
 bool StageController::beginWorkspaceSwipe(void* gesture, void (*original)(void*)) {
     auto* self = Impl::instance;
     const auto monitor = Desktop::focusState()->monitor();
-    if (!self || !original || !monitor || !self->ownsTransition(monitor->m_activeWorkspace))
+    if (!self || !original || !monitor || !self->ownsTransition(monitor->m_activeWorkspace, true))
         return false;
     self->swipeBeginOriginal = reinterpret_cast<Impl::SwipeBeginFn>(original);
     Impl::swipeBeginThunk(static_cast<CUnifiedWorkspaceSwipeGesture*>(gesture));
@@ -2336,7 +2346,7 @@ bool StageController::beginTrackpadWorkspaceSwipe() {
     auto* native = g_pUnifiedWorkspaceSwipe.get();
     if (!self || !native || (native->isGestureInProgress() && !self->swipe))
         return false;
-    // ownsTransition excludes fullscreen, special workspaces and session lock.
+    // Swipe ownership permits fullscreen but excludes special workspaces and session lock.
     // Initialize the native bookkeeping directly: invoking begin() here would
     // route through an optional hook and could initialize the gesture twice.
     return beginWorkspaceSwipe(native, +[](void* pointer) {
