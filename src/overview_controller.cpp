@@ -12563,8 +12563,19 @@ void OverviewController::activateStripTarget(std::size_t index) {
     // so close the overview once the switch has actually started -- unless
     // workspace_change_keeps_overview says to stay open, same flag already
     // used to gate workspace switching while the overview is visible.
-    if (!workspaceChangeKeepsOverviewEnabled())
+    if (!workspaceChangeKeepsOverviewEnabled()) {
+        // beginOverviewWorkspaceTransition only arms the animated slide --
+        // the real Hyprland workspace switch doesn't happen until
+        // commitOverviewWorkspaceTransition runs, normally once that slide
+        // animation finishes. close() ABORTS an in-progress transition
+        // (clearOverviewWorkspaceTransition with no committed workspace)
+        // rather than committing it, so calling it immediately here would
+        // close the overview without ever actually switching workspaces.
+        // Force the commit through right away instead of waiting on the
+        // animation.
+        commitOverviewWorkspaceTransition(false);
         (void)close();
+    }
 }
 
 void OverviewController::notify(const std::string& message, const CHyprColor& color, float durationMs) const {
