@@ -9775,9 +9775,12 @@ void OverviewController::requestCloseHoveredStripTarget() {
     if (!m_state.hoveredStripCloseIndex || *m_state.hoveredStripCloseIndex >= m_state.stripEntries.size())
         return;
 
-    const auto& entry = m_state.stripEntries[*m_state.hoveredStripCloseIndex];
+    const auto  index = *m_state.hoveredStripCloseIndex;
+    const auto& entry = m_state.stripEntries[index];
     if (!entry.workspace)
         return;
+
+    const PHLWORKSPACE targetWorkspace = entry.workspace;
 
     // Deliberately per-instance only, NOT a rule-level change: this must
     // stay a repeatable manual action (click delete -> gone now), not a
@@ -9790,7 +9793,7 @@ void OverviewController::requestCloseHoveredStripTarget() {
     // static workspace rule is untouched, so revisiting/repopulating it
     // later and emptying it again brings back a normal persistent tile you
     // can delete again.
-    entry.workspace->setPersistent(false);
+    targetWorkspace->setPersistent(false);
 
     // Capture the tile's already-rendered snapshot so it can fade out in
     // place over the next few frames instead of just vanishing the instant
@@ -9804,10 +9807,19 @@ void OverviewController::requestCloseHoveredStripTarget() {
         };
     }
 
-    // The overview's own displayed strip is a snapshot built when the
-    // overview opened (or last rebuilt) -- without this the tile just sits
-    // there showing stale data until the overview is closed and reopened,
-    // even though the underlying change already took effect.
+    // Drop every m_state reference to this workspace BEFORE scheduling the
+    // rebuild below. setPersistent(false) only released the workspace's
+    // OWN self-reference -- m_state.managedWorkspaces (and this very strip
+    // entry's own .workspace field) still hold a live reference to it for
+    // the entire duration of the deferred rebuild, so buildState()'s "does
+    // this workspace currently exist" check finds it very much still alive
+    // (kept alive by the exact state that's supposed to notice it's gone)
+    // and just includes it again, unchanged, every single time -- which is
+    // why the tile previously kept showing until the overview was closed
+    // and reopened from scratch instead of updating in place.
+    std::erase_if(m_state.managedWorkspaces, [&](const PHLWORKSPACE& ws) { return ws == targetWorkspace; });
+    m_state.stripEntries[index].workspace.reset();
+
     scheduleVisibleStateRebuild();
 }
 
