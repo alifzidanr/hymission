@@ -309,6 +309,7 @@ class OverviewController {
         std::optional<std::size_t>             hoveredStripIndex;
         std::optional<std::size_t>             hoveredIndex;
         std::optional<std::size_t>             hoveredCloseIndex; // tile whose close button the cursor is on
+        std::optional<std::size_t>             hoveredStripCloseIndex; // strip entry whose close button the cursor is on
         std::optional<std::size_t>             selectedIndex;
         double                                 animationProgress = 0.0;
         double                                 animationFromVisual = 0.0;
@@ -839,6 +840,10 @@ class OverviewController {
     [[nodiscard]] std::optional<std::size_t> hitTestCloseButton(double x, double y) const;
     void                                     renderCloseButtons() const;
     void                                     requestCloseHoveredWindow();
+    [[nodiscard]] Rect                       stripCloseButtonRectFor(const WorkspaceStripEntry& entry) const;
+    [[nodiscard]] std::optional<std::size_t> hitTestStripCloseButton(double x, double y) const;
+    void                                     renderStripCloseButtons() const;
+    void                                     requestCloseHoveredStripTarget();
     [[nodiscard]] bool workspaceStripEntriesMatchForSnapshot(const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) const;
     void carryOverWorkspaceStripSnapshots(State& next, const State& previous) const;
     void renderWorkspaceStrip() const;
@@ -1003,6 +1008,7 @@ class OverviewController {
     bool                     m_stripSnapshotRefreshScheduled = false;
     bool                     m_primaryButtonPressed = false;
     bool                     m_closeButtonPressLatched = false; // swallow release after close-button click
+    bool                     m_stripCloseButtonPressLatched = false; // swallow release after strip close-button click
     bool                     m_groupLabelPressLatched = false;
     bool                     m_closeCursorOverride = false;     // forcing the "pointer" cursor while hover
     std::optional<std::size_t> m_pressedStripIndex;

@@ -131,6 +131,7 @@ class OverviewOverlayPassElement final : public IPassElement {
         m_controller->renderPickLabels();
         m_controller->renderCloseButtons();
         m_controller->renderWorkspaceStrip();
+        m_controller->renderStripCloseButtons();
         m_controller->renderDraggedWindowPreview();
         return {};
     }
@@ -2919,6 +2920,7 @@ std::string OverviewController::handleCaptureInputCommand(const std::string& arg
         clearStripWindowDragState();
         m_primaryButtonPressed = false;
         m_closeButtonPressLatched = false;
+        m_stripCloseButtonPressLatched = false;
         return "ok\n";
     }
 
@@ -2928,6 +2930,7 @@ std::string OverviewController::handleCaptureInputCommand(const std::string& arg
         clearStripWindowDragState();
         m_primaryButtonPressed = false;
         m_closeButtonPressLatched = false;
+        m_stripCloseButtonPressLatched = false;
         return "ok\n";
     }
 
@@ -3210,6 +3213,20 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
     }
     if (m_closeButtonPressLatched && effectiveState == WL_POINTER_BUTTON_STATE_RELEASED) {
         m_closeButtonPressLatched = false;
+        return true;
+    }
+
+    // Same press/release latch pattern as the window close button above,
+    // and same priority -- takes precedence over the strip tile's own
+    // click-to-switch handling below, since the button visually sits on the
+    // tile's corner.
+    if (m_state.hoveredStripCloseIndex && effectiveState == WL_POINTER_BUTTON_STATE_PRESSED) {
+        requestCloseHoveredStripTarget();
+        m_stripCloseButtonPressLatched = true;
+        return true;
+    }
+    if (m_stripCloseButtonPressLatched && effectiveState == WL_POINTER_BUTTON_STATE_RELEASED) {
+        m_stripCloseButtonPressLatched = false;
         return true;
     }
 
@@ -9687,6 +9704,51 @@ void OverviewController::requestCloseHoveredWindow() {
     }
 }
 
+// Strip-tile equivalent of closeButtonRectFor/hitTestCloseButton/
+// requestCloseHoveredWindow above -- "deleting" a workspace thumbnail means
+// closing every window on it (an empty, non-persistent workspace already
+// stops existing/showing on its own; a persistent one needs its
+// `persistent = true` workspace rule removed instead, which this can't do
+// from inside the overview).
+Rect OverviewController::stripCloseButtonRectFor(const WorkspaceStripEntry& entry) const {
+    if (entry.windows.empty())
+        return {};
+
+    const double size = closeButtonSize();
+    const Rect   tile = animatedWorkspaceStripRect(entry.rect, entry.monitor);
+
+    if (tile.width < size * 3.0 || tile.height < size * 3.0)
+        return {};
+
+    const double offset = size * 0.5 + closeButtonInset();
+    return makeRect(tile.x - offset, tile.y - offset, size, size);
+}
+
+std::optional<std::size_t> OverviewController::hitTestStripCloseButton(double x, double y) const {
+    if (!closeButtonsEnabled() || !isVisible() || m_state.phase != Phase::Active)
+        return std::nullopt;
+
+    for (std::size_t index = 0; index < m_state.stripEntries.size(); ++index) {
+        const Rect rect = stripCloseButtonRectFor(m_state.stripEntries[index]);
+        if (rect.width <= 0.0 || rect.height <= 0.0)
+            continue;
+        if (rectContainsPoint(rect, x, y))
+            return index;
+    }
+    return std::nullopt;
+}
+
+void OverviewController::requestCloseHoveredStripTarget() {
+    if (!m_state.hoveredStripCloseIndex || *m_state.hoveredStripCloseIndex >= m_state.stripEntries.size())
+        return;
+
+    const auto& entry = m_state.stripEntries[*m_state.hoveredStripCloseIndex];
+    for (const auto& preview : entry.windows) {
+        if (preview.window && g_pCompositor)
+            preview.window->sendClose();
+    }
+}
+
 double OverviewController::visualProgress() const {
     if (m_gestureSession.active)
         return clampUnit(m_gestureSession.openness);
@@ -11864,6 +11926,7 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
 
     m_state.hoveredStripIndex = hitTestStripTarget(pointer.x, pointer.y);
     m_state.hoveredCloseIndex = draggingWindow ? std::optional<std::size_t>{} : hitTestCloseButton(pointer.x, pointer.y);
+    m_state.hoveredStripCloseIndex = draggingWindow ? std::optional<std::size_t>{} : hitTestStripCloseButton(pointer.x, pointer.y);
     if (draggingWindow) {
         m_state.hoveredIndex.reset();
         if (!m_state.hoveredStripIndex && m_draggedWindowIndex)
@@ -11891,11 +11954,11 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
     // Cursor: switch to "pointer" while hovering a close button, restore
     // when leaving. Only call setCursorFromName on transition so we don't
     // fight the focused client's cursor every mouse-move frame.
-    if (m_state.hoveredCloseIndex && !m_closeCursorOverride) {
+    if ((m_state.hoveredCloseIndex || m_state.hoveredStripCloseIndex) && !m_closeCursorOverride) {
         if (Pointer::Cursor::mgr())
             Pointer::Cursor::mgr()->setCursorFromName("pointer");
         m_closeCursorOverride = true;
-    } else if (!m_state.hoveredCloseIndex && m_closeCursorOverride) {
+    } else if (!m_state.hoveredCloseIndex && !m_state.hoveredStripCloseIndex && m_closeCursorOverride) {
         if (Pointer::Cursor::mgr())
             Pointer::Cursor::mgr()->setCursorFromName("left_ptr");
         m_closeCursorOverride = false;
@@ -13363,6 +13426,60 @@ void OverviewController::renderCloseButtons() const {
         const double stroke  = std::max(1.0, rectLocal.width * 0.085);
         // Two samples per pixel of diagonal length so the line reads
         // smooth at any button size.
+        const int    samples = std::max(16, static_cast<int>(std::round(diag * 2.0)));
+
+        for (int s = 0; s <= samples; ++s) {
+            const double t = static_cast<double>(s) / static_cast<double>(samples);
+            const double x1 = xL + (xR - xL) * t;
+            const double y1 = yT + (yB - yT) * t;
+            g_pHyprOpenGL->renderRect(toBox(makeRect(x1 - stroke * 0.5, y1 - stroke * 0.5, stroke, stroke)), glyphCol, {});
+            const double x2 = xR - (xR - xL) * t;
+            const double y2 = yT + (yB - yT) * t;
+            g_pHyprOpenGL->renderRect(toBox(makeRect(x2 - stroke * 0.5, y2 - stroke * 0.5, stroke, stroke)), glyphCol, {});
+        }
+    }
+}
+
+void OverviewController::renderStripCloseButtons() const {
+    if (!closeButtonsEnabled() || m_draggedWindowIndex)
+        return;
+
+    const double progress = visualProgress();
+    if (progress <= 0.0 || m_state.phase != Phase::Active)
+        return;
+
+    const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    if (!renderMonitor)
+        return;
+
+    // Same macOS-style disk+X as renderCloseButtons(), reusing the exact
+    // same config-driven colors so a strip tile's close button looks
+    // identical to a window tile's.
+    const CHyprColor idleFill  = colorWithAlphaMultiplier(closeButtonColor(), progress);
+    const CHyprColor hoverFill = colorWithAlphaMultiplier(closeButtonHoverColor(), progress);
+    const CHyprColor glyphCol  = colorWithAlphaMultiplier(closeButtonGlyphColor(), progress);
+
+    for (std::size_t index = 0; index < m_state.stripEntries.size(); ++index) {
+        const auto& entry = m_state.stripEntries[index];
+        if (entry.monitor != renderMonitor)
+            continue;
+
+        const Rect rectGlobal = stripCloseButtonRectFor(entry);
+        if (rectGlobal.width <= 0.0 || rectGlobal.height <= 0.0)
+            continue;
+
+        const Rect rectLocal = rectToMonitorRenderLocal(rectGlobal, renderMonitor);
+        const bool hovered   = m_state.hoveredStripCloseIndex && *m_state.hoveredStripCloseIndex == index;
+
+        g_pHyprOpenGL->renderRect(toBox(rectLocal), hovered ? hoverFill : idleFill, {.round = static_cast<int>(std::round(rectLocal.width * 0.5))});
+
+        const double pad     = rectLocal.width * 0.34;
+        const double xL      = rectLocal.x + pad;
+        const double xR      = rectLocal.x + rectLocal.width  - pad;
+        const double yT      = rectLocal.y + pad;
+        const double yB      = rectLocal.y + rectLocal.height - pad;
+        const double diag    = std::hypot(xR - xL, yB - yT);
+        const double stroke  = std::max(1.0, rectLocal.width * 0.085);
         const int    samples = std::max(16, static_cast<int>(std::round(diag * 2.0)));
 
         for (int s = 0; s <= samples; ++s) {
