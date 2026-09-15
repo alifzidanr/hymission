@@ -142,6 +142,8 @@ class OverviewController {
     void                       scrollMoveGestureUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e);
     void                       scrollMoveGestureEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
   private:
+    [[nodiscard]] bool nativeWindowRenderActive() const;
+
     friend class OverviewOverlayPassElement;
 
     enum class Phase {
