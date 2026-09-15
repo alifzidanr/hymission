@@ -9705,13 +9705,15 @@ void OverviewController::requestCloseHoveredWindow() {
 }
 
 // Strip-tile equivalent of closeButtonRectFor/hitTestCloseButton/
-// requestCloseHoveredWindow above -- "deleting" a workspace thumbnail means
-// closing every window on it (an empty, non-persistent workspace already
-// stops existing/showing on its own; a persistent one needs its
-// `persistent = true` workspace rule removed instead, which this can't do
-// from inside the overview).
+// requestCloseHoveredWindow above, but only for EMPTY tiles -- a tile with
+// windows has nothing meaningful for this button to do (there's already a
+// close button on each window itself), and "deleting" an occupied workspace
+// isn't what this is for. For an empty tile, closing windows isn't the
+// action either (there are none): the actual problem an empty tile
+// represents is a `persistent = true` workspace rule keeping it alive and
+// visible forever, so the button strips that rule's persistence instead.
 Rect OverviewController::stripCloseButtonRectFor(const WorkspaceStripEntry& entry) const {
-    if (entry.windows.empty())
+    if (!entry.windows.empty() || !entry.workspace || entry.syntheticEmpty || entry.newWorkspaceSlot)
         return {};
 
     const double size = closeButtonSize();
@@ -9743,10 +9745,27 @@ void OverviewController::requestCloseHoveredStripTarget() {
         return;
 
     const auto& entry = m_state.stripEntries[*m_state.hoveredStripCloseIndex];
-    for (const auto& preview : entry.windows) {
-        if (preview.window && g_pCompositor)
-            preview.window->sendClose();
+    if (!entry.workspace)
+        return;
+
+    // Flip persistent off in the actual workspace RULE (not just this live
+    // CWorkspace instance) so it stays gone if you revisit and re-empty it
+    // later too, not just this once. getWorkspaceRuleFor merges every rule
+    // matching this workspace's selector into one, including which literal
+    // selector string matched -- reusing that string is what lets
+    // replaceOrAdd find and update the *same* rule instead of adding a
+    // conflicting duplicate. mergeLeft only overwrites fields the passed-in
+    // rule actually sets, so every other property (monitor binding,
+    // default, gaps, etc.) is left exactly as configured.
+    if (auto rule = Config::workspaceRuleMgr()->getWorkspaceRuleFor(entry.workspace); rule) {
+        rule->m_isPersistent = false;
+        Config::workspaceRuleMgr()->replaceOrAdd(std::move(*rule));
     }
+
+    // Also drop the live instance's self-reference now, so an already-empty
+    // workspace can go away immediately instead of waiting on some other
+    // event to notice the rule changed.
+    entry.workspace->setPersistent(false);
 }
 
 double OverviewController::visualProgress() const {
@@ -12594,8 +12613,14 @@ void OverviewController::activateStripTarget(std::size_t index) {
         return;
 
     if (targetWorkspace && entry.monitor->m_activeWorkspace == targetWorkspace) {
+        // Clicking the tile for the workspace you're already on has nothing
+        // to transition to, but it's still a "go there" click -- so it
+        // should still close the overview like every other strip click
+        // does, rather than silently doing nothing.
         m_state.hoveredStripIndex = index;
         damageOwnedMonitors();
+        if (!workspaceChangeKeepsOverviewEnabled())
+            (void)close();
         return;
     }
 
