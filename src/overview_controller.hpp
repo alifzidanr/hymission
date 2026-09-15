@@ -264,6 +264,13 @@ class OverviewController {
         std::chrono::steady_clock::time_point start = {};
     };
 
+    struct StripDeleteAnimation {
+        PHLMONITOR                            monitor;
+        SP<Render::IFramebuffer>              framebuffer; // last-captured snapshot of the tile, reused as-is
+        Rect                                  rect;
+        std::chrono::steady_clock::time_point start = {};
+    };
+
     struct GroupDragSession {
         SP<Desktop::View::CGroup> group;
         std::vector<PHLWINDOWREF> members;
@@ -727,6 +734,8 @@ class OverviewController {
     [[nodiscard]] double                           dropAnimationProgress() const;
     [[nodiscard]] bool                             dropAnimationMatchesEntry(const WorkspaceStripEntry& entry) const;
     void                                           updateDropAnimation();
+    [[nodiscard]] double                           stripDeleteAnimationProgress() const;
+    void                                           updateStripDeleteAnimation();
     [[nodiscard]] bool                       placeNewWindowInHoveredThumbnailWorkspace(const PHLWINDOW& window);
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
     [[nodiscard]] double       visualProgress() const;
@@ -844,6 +853,7 @@ class OverviewController {
     [[nodiscard]] std::optional<std::size_t> hitTestStripCloseButton(double x, double y) const;
     void                                     renderStripCloseButtons() const;
     void                                     requestCloseHoveredStripTarget();
+    void                                     renderStripDeleteAnimation() const;
     [[nodiscard]] bool workspaceStripEntriesMatchForSnapshot(const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) const;
     void carryOverWorkspaceStripSnapshots(State& next, const State& previous) const;
     void renderWorkspaceStrip() const;
@@ -1016,6 +1026,7 @@ class OverviewController {
     std::optional<std::size_t>   m_draggedWindowIndex;
     std::optional<DragSettlement> m_dragSettlement;
     std::optional<DropAnimation>  m_dropAnimation;
+    std::optional<StripDeleteAnimation> m_stripDeleteAnimation;
     std::optional<GroupDragSession> m_groupDragSession;
     SP<Render::IFramebuffer>      m_draggedWindowFramebuffer;
     SP<Render::ITexture>          m_draggedWindowTexture;

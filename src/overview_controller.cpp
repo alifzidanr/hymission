@@ -132,6 +132,7 @@ class OverviewOverlayPassElement final : public IPassElement {
         m_controller->renderCloseButtons();
         m_controller->renderWorkspaceStrip();
         m_controller->renderStripCloseButtons();
+        m_controller->renderStripDeleteAnimation();
         m_controller->renderDraggedWindowPreview();
         return {};
     }
@@ -239,6 +240,7 @@ constexpr auto   DRAG_PREVIEW_SHRINK_DURATION = std::chrono::milliseconds(120);
 constexpr auto   DRAG_RETURN_ANIMATION_DURATION = std::chrono::milliseconds(180);
 constexpr auto   STRIP_DRAG_DIM_DURATION = std::chrono::milliseconds(110);
 constexpr auto   STRIP_DROP_ANIMATION_DURATION = std::chrono::milliseconds(220);
+constexpr auto   STRIP_DELETE_ANIMATION_DURATION = std::chrono::milliseconds(220);
 constexpr double STRIP_DRAG_DIM_ALPHA = 0.28;
 // Cursor must hover-pause on a candidate window for this long before the
 // expand-on-hover relayout kicks in. 48ms was short enough that fast mouse
@@ -2965,6 +2967,7 @@ void OverviewController::renderStage(eRenderStage stage) {
 
     if (stage == RENDER_POST_WALLPAPER) {
         updateDropAnimation();
+        updateStripDeleteAnimation();
         updateGroupDragSettlement();
         updateOverviewWorkspaceTransition();
         updateAnimation();
@@ -9427,6 +9430,23 @@ void OverviewController::updateDropAnimation() {
         m_dropAnimation.reset();
 }
 
+double OverviewController::stripDeleteAnimationProgress() const {
+    if (!m_stripDeleteAnimation || m_stripDeleteAnimation->start == std::chrono::steady_clock::time_point{})
+        return 1.0;
+
+    const auto elapsed = std::chrono::steady_clock::now() - m_stripDeleteAnimation->start;
+    return clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
+                     static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DELETE_ANIMATION_DURATION).count()));
+}
+
+void OverviewController::updateStripDeleteAnimation() {
+    if (!m_stripDeleteAnimation)
+        return;
+
+    if (!m_stripDeleteAnimation->framebuffer || stripDeleteAnimationProgress() >= 1.0)
+        m_stripDeleteAnimation.reset();
+}
+
 void OverviewController::updateGroupDragSettlement() {
     if (!m_groupDragSession || !m_groupDragSession->settling || m_groupDragSession->completionScheduled)
         return;
@@ -9748,30 +9768,35 @@ void OverviewController::requestCloseHoveredStripTarget() {
     if (!entry.workspace)
         return;
 
-    // Flip persistent off in the actual workspace RULE (not just this live
-    // CWorkspace instance) so it stays gone if you revisit and re-empty it
-    // later too, not just this once. getWorkspaceRuleFor merges every rule
-    // matching this workspace's selector into one, including which literal
-    // selector string matched -- reusing that string is what lets
-    // replaceOrAdd find and update the *same* rule instead of adding a
-    // conflicting duplicate. mergeLeft only overwrites fields the passed-in
-    // rule actually sets, so every other property (monitor binding,
-    // default, gaps, etc.) is left exactly as configured.
-    if (auto rule = Config::workspaceRuleMgr()->getWorkspaceRuleFor(entry.workspace); rule) {
-        rule->m_isPersistent = false;
-        Config::workspaceRuleMgr()->replaceOrAdd(std::move(*rule));
-    }
-
-    // Also drop the live instance's self-reference now, so an already-empty
-    // workspace can go away immediately instead of waiting on some other
-    // event to notice the rule changed.
+    // Deliberately per-instance only, NOT a rule-level change: this must
+    // stay a repeatable manual action (click delete -> gone now), not a
+    // one-time permanent edit. A rule-level edit (e.g. via
+    // Config::workspaceRuleMgr()->replaceOrAdd) would make the workspace
+    // non-persistent forever, so it auto-vanishes on its own the very next
+    // time it empties out again -- no click needed at that point, making
+    // the button pointless after its first use. setPersistent(false) alone
+    // drops this instance's self-reference so it can go away now; the
+    // static workspace rule is untouched, so revisiting/repopulating it
+    // later and emptying it again brings back a normal persistent tile you
+    // can delete again.
     entry.workspace->setPersistent(false);
 
-    // Neither of the above touches m_state -- the overview's own displayed
-    // strip is a snapshot built when the overview opened (or last rebuilt),
-    // so without this the tile just sits there showing stale data until the
-    // overview is closed and reopened, even though the underlying change
-    // already took effect.
+    // Capture the tile's already-rendered snapshot so it can fade out in
+    // place over the next few frames instead of just vanishing the instant
+    // the strip rebuilds around it.
+    if (entry.snapshot && entry.snapshot->framebuffer && entry.snapshot->framebuffer->isAllocated() && entry.snapshot->framebuffer->getTexture()) {
+        m_stripDeleteAnimation = StripDeleteAnimation{
+            .monitor = entry.monitor,
+            .framebuffer = entry.snapshot->framebuffer,
+            .rect = animatedWorkspaceStripRect(entry.rect, entry.monitor),
+            .start = std::chrono::steady_clock::now(),
+        };
+    }
+
+    // The overview's own displayed strip is a snapshot built when the
+    // overview opened (or last rebuilt) -- without this the tile just sits
+    // there showing stale data until the overview is closed and reopened,
+    // even though the underlying change already took effect.
     scheduleVisibleStateRebuild();
 }
 
@@ -11175,6 +11200,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     ++m_workspaceChangeHandlingGeneration;
     clearPendingStripWorkspaceChange();
     m_dropAnimation.reset();
+    m_stripDeleteAnimation.reset();
     clearStripWindowDragState();
     clearPickLabelPrefixState();
     clearSpatialPickCache();
@@ -11588,6 +11614,7 @@ void OverviewController::deactivate() {
     ++m_workspaceChangeHandlingGeneration;
     clearPendingStripWorkspaceChange();
     m_dropAnimation.reset();
+    m_stripDeleteAnimation.reset();
     clearStripWindowDragState();
     clearPickLabelPrefixState();
     clearSpatialPickCache();
@@ -13530,6 +13557,39 @@ void OverviewController::renderStripCloseButtons() const {
             g_pHyprOpenGL->renderRect(toBox(makeRect(x2 - stroke * 0.5, y2 - stroke * 0.5, stroke, stroke)), glyphCol, {});
         }
     }
+}
+
+// Fades and slightly shrinks the tile's last-captured snapshot in place
+// over STRIP_DELETE_ANIMATION_DURATION, purely from the frozen framebuffer
+// captured at delete time -- independent of m_state.stripEntries, which
+// has usually already dropped the entry by the time this is animating out
+// (scheduleVisibleStateRebuild runs the same frame delete is requested).
+void OverviewController::renderStripDeleteAnimation() const {
+    if (!m_stripDeleteAnimation)
+        return;
+
+    const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    if (!renderMonitor || m_stripDeleteAnimation->monitor != renderMonitor)
+        return;
+
+    const auto& anim = *m_stripDeleteAnimation;
+    if (!anim.framebuffer || !anim.framebuffer->isAllocated() || !anim.framebuffer->getTexture())
+        return;
+
+    const double raw   = stripDeleteAnimationProgress();
+    const double eased = easeInCubic(raw);
+
+    const double scale   = 1.0 - eased * 0.18;
+    const double shrunkW = anim.rect.width * scale;
+    const double shrunkH = anim.rect.height * scale;
+    const Rect   scaledGlobal =
+        makeRect(anim.rect.x + (anim.rect.width - shrunkW) * 0.5, anim.rect.y + (anim.rect.height - shrunkH) * 0.5, shrunkW, shrunkH);
+    const Rect rectLocal = rectToMonitorRenderLocal(scaledGlobal, renderMonitor);
+
+    g_pHyprOpenGL->renderTexture(anim.framebuffer->getTexture(), toBox(rectLocal), {.a = static_cast<float>(1.0 - eased)});
+
+    if (raw < 1.0)
+        g_pHyprRenderer->damageMonitor(renderMonitor);
 }
 
 void OverviewController::renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const {
