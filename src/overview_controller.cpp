@@ -6844,6 +6844,17 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     auto targetWorkspace = ::State::workspaceState()->query().id(targetWorkspaceId).run();
     if (!targetWorkspace && targetWorkspaceSyntheticEmpty) {
         targetWorkspace = ::State::workspaceState()->create(targetWorkspaceId, transitionMonitor->m_id, targetWorkspaceName);
+
+        // A workspace created this way (the strip's "+" slot, or any other
+        // synthetic-target transition) has no workspace rule backing it, so
+        // it defaults to non-persistent -- Hyprland would silently remove
+        // it the instant you switch away before adding a window, which is
+        // indistinguishable from it just vanishing on its own. Mark it
+        // persistent so it sticks around empty until deliberately removed
+        // (the strip's delete button), matching manual-only deletion
+        // instead of "empty + unfocused = gone".
+        if (targetWorkspace)
+            targetWorkspace->setPersistent(true);
     }
     if (!targetWorkspace) {
         clearOverviewWorkspaceTransition();
