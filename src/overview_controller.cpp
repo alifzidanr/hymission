@@ -3324,6 +3324,9 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
                 if (Animation::mgr())
                     Animation::mgr()->frameTick();
                 rebuildVisibleState(window, true);
+
+                if (!workspaceChangeKeepsOverviewEnabled())
+                    (void)close();
             } else if (window && draggedPreview && dropMonitor && dragReturnTarget.width > 0.0 && dragReturnTarget.height > 0.0) {
                 m_dropAnimation = DropAnimation{
                     .window = window,
@@ -9433,6 +9436,9 @@ void OverviewController::updateGroupDragSettlement() {
             moveWindowToWorkspaceForThumbnailDrop(frontWindow, targetWorkspace);
             refreshWorkspaceLayoutSnapshot(sourceWorkspace, true);
             refreshWorkspaceLayoutSnapshot(targetWorkspace, true);
+
+            if (!workspaceChangeKeepsOverviewEnabled())
+                (void)close();
         }
         if (frontWindow && isVisible())
             rebuildVisibleState(frontWindow, true);
@@ -12549,7 +12555,16 @@ void OverviewController::activateStripTarget(std::size_t index) {
         if (debugLogsEnabled())
             debugLog("[hymission] strip target transition begin failed");
         damageOwnedMonitors();
+        return;
     }
+
+    // Strip clicks are meant to be a direct "jump to this desktop" action
+    // (unlike the animated in-overview scroll used by swipe/keyboard nav),
+    // so close the overview once the switch has actually started -- unless
+    // workspace_change_keeps_overview says to stay open, same flag already
+    // used to gate workspace switching while the overview is visible.
+    if (!workspaceChangeKeepsOverviewEnabled())
+        (void)close();
 }
 
 void OverviewController::notify(const std::string& message, const CHyprColor& color, float durationMs) const {
