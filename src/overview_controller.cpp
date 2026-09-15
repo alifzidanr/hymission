@@ -9766,6 +9766,13 @@ void OverviewController::requestCloseHoveredStripTarget() {
     // workspace can go away immediately instead of waiting on some other
     // event to notice the rule changed.
     entry.workspace->setPersistent(false);
+
+    // Neither of the above touches m_state -- the overview's own displayed
+    // strip is a snapshot built when the overview opened (or last rebuilt),
+    // so without this the tile just sits there showing stale data until the
+    // overview is closed and reopened, even though the underlying change
+    // already took effect.
+    scheduleVisibleStateRebuild();
 }
 
 double OverviewController::visualProgress() const {
@@ -12662,7 +12669,13 @@ void OverviewController::activateStripTarget(std::size_t index) {
         // Force the commit through right away instead of waiting on the
         // animation.
         commitOverviewWorkspaceTransition(false);
-        (void)close();
+
+        // Clicking an existing desktop's tile is "take me there" -- clicking
+        // the "+ new workspace" slot is "set one up", which you'd normally
+        // want to stay in the overview for (to then drag windows into it,
+        // keep arranging, etc.) rather than get bounced out of immediately.
+        if (!syntheticTarget)
+            (void)close();
     }
 }
 
